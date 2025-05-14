@@ -20,8 +20,8 @@ from PIL import ImageGrab, Image
 import pyperclip
 
 # === API KEYS ===
-WEATHER_API_KEY = "ff80fe49f6d921cb7686df6917015a51"
-NEWS_API_KEY = "f9adae143f4a4e738932ce3122d7ff31"
+WEATHER_API_KEY = "ff80fe49f6d921cb7686df697ygg26u96yg17015a51"
+NEWS_API_KEY = "f9adae143f4a4e738iw932cevx3122d7ff31"
 
 engine = pyttsx3.init()
 engine.setProperty('rate', 180)
