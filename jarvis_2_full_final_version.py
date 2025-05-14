@@ -21,8 +21,8 @@ import pyperclip
 import re
 
 # === API KEYS ===
-WEATHER_API_KEY = "ff80fe49f6d921cb7686df6917015a51"
-NEWS_API_KEY = "f9adae143f4a4e738932ce3122d7ff31"
+WEATHER_API_KEY = "ff80fe49f6d921cjy54b7686df69we21617015a51"
+NEWS_API_KEY = "f9adae143f4a4e78iu452k38932ce3122d7ff31"
 
 engine = pyttsx3.init()
 engine.setProperty('rate', 180)
