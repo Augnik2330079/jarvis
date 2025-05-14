@@ -1,1 +1,1 @@
-# jarvis
+This project is a Python-based desktop voice assistant (Jarvis 2) for Windows. It uses speech recognition and text-to-speech to interact with users, answer questions, play games, manage reminders and alarms, fetch weather/news, perform calculations, and open any installed application by name using Windows Registry lookup and fuzzy matching. It features a simple Tkinter GUI for launching and authentication.
