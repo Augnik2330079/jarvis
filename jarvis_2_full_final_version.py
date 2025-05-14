@@ -18,10 +18,11 @@ import winreg
 from tkinter import simpledialog, messagebox
 from PIL import ImageGrab, Image
 import pyperclip
+import re
 
 # === API KEYS ===
-WEATHER_API_KEY = "ff80fe49f6d921cb7686df697ygg26u96yg17015a51"
-NEWS_API_KEY = "f9adae143f4a4e738iw932cevx3122d7ff31"
+WEATHER_API_KEY = "ff80fe49f6d921cb7686df6917015a51"
+NEWS_API_KEY = "f9adae143f4a4e738932ce3122d7ff31"
 
 engine = pyttsx3.init()
 engine.setProperty('rate', 180)
@@ -29,7 +30,6 @@ engine.setProperty('rate', 180)
 SILENT_MODE = False
 WHISPER_MODE = False
 
-# Cache for installed applications
 INSTALLED_APPS_CACHE = []
 CACHE_TIMESTAMP = 0
 CACHE_DURATION = 3600  # 1 hour cache
@@ -71,7 +71,6 @@ def take_command():
     return query.lower()
 
 def parse_alarm_time(alarm_str):
-    import re
     alarm_str = alarm_str.strip().lower().replace(' ', '')
     match = re.match(r'(\d{1,2})(:?(\d{2}))?(am|pm)?', alarm_str)
     if not match:
@@ -107,7 +106,6 @@ def set_alarm(alarm_time_str):
 # ---------------------- UNIVERSAL APP LAUNCHER ----------------------
 
 def get_installed_apps():
-    """Get list of installed applications with display names and commands"""
     global INSTALLED_APPS_CACHE, CACHE_TIMESTAMP
     if time.time() - CACHE_TIMESTAMP < CACHE_DURATION and INSTALLED_APPS_CACHE:
         return INSTALLED_APPS_CACHE
@@ -158,18 +156,14 @@ def get_installed_apps():
     return apps
 
 def find_application(target):
-    """Find best matching application using fuzzy search"""
     target = target.lower().strip()
     apps = get_installed_apps()
-    # First pass: exact match
     for app in apps:
         if app["name"] == target:
             return app
-    # Second pass: contains match
     for app in apps:
         if target in app["name"]:
             return app
-    # Third pass: ratio-based fuzzy match
     from difflib import SequenceMatcher
     matches = []
     for app in apps:
@@ -181,7 +175,6 @@ def find_application(target):
     return None
 
 def open_application(app_name):
-    """Open any installed application by name"""
     app = find_application(app_name)
     if not app:
         speak(f"Application '{app_name}' not found")
@@ -190,7 +183,6 @@ def open_application(app_name):
         cmd = app["command"]
         if " " in cmd and not cmd.startswith('"'):
             cmd = f'"{cmd}"'
-        # Extract exe from uninstall strings
         if "uninstall" in cmd.lower():
             if "msiexec" in cmd.lower():
                 import re
@@ -208,6 +200,18 @@ def open_application(app_name):
         speak(f"Failed to open {app['raw_name']}")
 
 # ---------------------- END UNIVERSAL APP LAUNCHER ----------------------
+
+def spoken_number_to_digits(text):
+    mapping = {
+        "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4",
+        "five": "5", "six": "6", "seven": "7", "eight": "8", "nine": "9",
+        "plus": "+", "class": "+"
+    }
+    words = text.lower().split()
+    digits = ""
+    for word in words:
+        digits += mapping.get(word, word)
+    return digits
 
 def handle_command(query):
     global SILENT_MODE, WHISPER_MODE
@@ -309,6 +313,32 @@ def handle_command(query):
         speak("Please say the alarm time (e.g., '7:30 PM' or '19:30').")
         alarm_time = take_command()
         set_alarm(alarm_time)
+
+    # ========== WHATSAPP MESSAGING FEATURE ==========
+    elif "whatsapp" in query or "send message" in query or "send whatsapp message" in query:
+        try:
+            speak("Please say the phone number with country code. Example: plus nine one nine8xxxxxxx")
+            number_input_raw = take_command()
+            number_input = spoken_number_to_digits(number_input_raw)
+            number_input = re.sub(r"[^\d+]", "", number_input)
+            if not number_input.startswith("+") or len(number_input) < 10:
+                speak("Invalid number format. Please try again.")
+                return
+            speak("What should I say?")
+            message = take_command()
+            if not message:
+                speak("No message detected. Please try again.")
+                return
+            import pywhatkit
+            pywhatkit.sendwhatmsg_instantly(
+                phone_no=number_input,
+                message=message,
+                tab_close=True
+            )
+            speak("WhatsApp message sent successfully")
+        except Exception as e:
+            print(f"WhatsApp Error: {str(e)}")
+            speak("Failed to send WhatsApp message. Please check the number and try again.")
 
     elif "silent mode" in query:
         SILENT_MODE = True
