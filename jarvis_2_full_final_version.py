@@ -20,12 +20,14 @@ from PIL import ImageGrab, Image
 import pyperclip
 import re
 import traceback
+from threading import Timer
+from difflib import SequenceMatcher
 
 # === API KEYS ===
 WEATHER_API_KEY = "ff80fe49f6d921cb7686df6917015a51"
 NEWS_API_KEY = "f9adae143f4a4e738932ce3122d7ff31"
 
-PASSWORD = "1234"
+PASSWORD = os.getenv("JARVIS_PASSWORD", "1234")
 USER_NAME = "Sir"
 NOTES_FOLDER = "Jarvis_Notes"
 TODO_FILE = "todo.txt"
@@ -36,7 +38,7 @@ WHISPER_MODE = False
 
 def add_to_startup():
     try:
-        script_path = os.path.abspath(__file__)
+        script_path = os.path.abspath(sys.argv[0])
         startup_folder = os.path.join(
             os.environ["APPDATA"],
             r"Microsoft\Windows\Start Menu\Programs\Startup"
@@ -55,6 +57,9 @@ def add_to_startup():
 
 engine = pyttsx3.init()
 engine.setProperty('rate', 180)
+voices = engine.getProperty('voices')
+if voices:
+    engine.setProperty('voice', voices[1].id if len(voices) > 1 else voices[0].id)
 
 def speak(text):
     global SILENT_MODE, WHISPER_MODE, SLEEP_MODE
@@ -76,10 +81,14 @@ def wish_user():
 def take_command():
     recognizer = sr.Recognizer()
     with sr.Microphone() as source:
+        print("Calibrating microphone for ambient noise...")
+        recognizer.adjust_for_ambient_noise(source, duration=3)  # Calibrate for 3 seconds
+        recognizer.energy_threshold = 300  # Lower threshold for soft voices; try 150–500 if needed
+        recognizer.dynamic_energy_threshold = True  # Auto-adjust threshold
+        recognizer.pause_threshold = 1.2   # Allow longer pauses for slow speech
         print("🔍 Listening...")
-        recognizer.pause_threshold = 1
         try:
-            audio = recognizer.listen(source, timeout=5, phrase_time_limit=8)
+            audio = recognizer.listen(source, timeout=8, phrase_time_limit=12)
             query = recognizer.recognize_google(audio, language='en-in').lower()
             print(f"🗣️ User: {query}")
             return query
@@ -90,6 +99,7 @@ def take_command():
         except Exception as e:
             print("Recognition error:", e)
             return ""
+
 
 def get_installed_apps():
     apps = []
@@ -144,11 +154,10 @@ def find_application(target):
     for app in apps:
         if target in app["name"]:
             return app
-    from difflib import SequenceMatcher
     matches = []
     for app in apps:
         ratio = SequenceMatcher(None, target, app["name"]).ratio()
-        if ratio > 0.6:
+        if ratio > 0.75:
             matches.append((ratio, app))
     return max(matches, key=lambda x: x[0])[1] if matches else None
 
@@ -166,6 +175,13 @@ def parse_alarm_time(alarm_str):
         elif meridian == 'am' and hour == 12:
             hour = 0
     return hour, minute
+
+def alarm_trigger():
+    try:
+        from playsound import playsound
+        playsound('alarm.mp3')
+    except Exception:
+        speak("Wake up! This is your alarm.")
 
 def handle_command(query):
     global SILENT_MODE, WHISPER_MODE, USER_NAME, SLEEP_MODE
@@ -377,15 +393,8 @@ def handle_command(query):
         if alarm_time_dt <= now:
             alarm_time_dt += datetime.timedelta(days=1)
         speak(f"Alarm set for {alarm_time_dt.strftime('%I:%M %p')}")
-        while True:
-            if datetime.datetime.now() >= alarm_time_dt:
-                try:
-                    from playsound import playsound
-                    playsound('alarm.mp3')
-                except:
-                    speak("Wake up! This is your alarm.")
-                break
-            time.sleep(1)
+        delay = (alarm_time_dt - datetime.datetime.now()).total_seconds()
+        Timer(delay, alarm_trigger).start()
         return
 
     # Quiz
@@ -429,7 +438,12 @@ def handle_command(query):
             speak("What should I say?")
             message = take_command()
             import pywhatkit
-            pywhatkit.sendwhatmsg_instantly(number, message, tab_close=True)
+            try:
+                webbrowser.get('chrome')
+                pywhatkit.sendwhatmsg_instantly(number, message, tab_close=True)
+            except webbrowser.Error:
+                speak("Chrome browser not available")
+                return
             speak("WhatsApp message sent.")
         except Exception as e:
             speak(f"Failed to send message: {str(e)}")
@@ -563,6 +577,8 @@ def run_voice_assistant():
         except Exception as e:
             print("Error:", e)
             traceback.print_exc()
+            with open("jarvis_errors.log", "a") as f:
+                f.write(f"{datetime.datetime.now()} - {str(e)}\n")
             speak("Error detected. Restarting...")
             time.sleep(5)
 
