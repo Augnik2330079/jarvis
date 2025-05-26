@@ -1,3 +1,11 @@
+import sys
+if not hasattr(sys.stdout, "fileno"):
+    import io
+    sys.stdout = io.StringIO()
+if not hasattr(sys.stderr, "fileno"):
+    import io
+    sys.stderr = io.StringIO()
+
 import os
 import sys
 import time
@@ -35,6 +43,120 @@ REMINDERS_FILE = "reminders.txt"
 SLEEP_MODE = False
 SILENT_MODE = False
 WHISPER_MODE = False
+# === JARVIS FEATURE FUNCTIONS ===
+
+import threading
+
+def set_volume(level):  # 0-100
+    import ctypes
+    ctypes.windll.winmm.waveOutSetVolume(0, int(level * 65535 / 100) * 0x10001)
+
+def mute_volume():
+    pyautogui.press('volumemute')
+
+def volume_up():
+    pyautogui.press('volumeup')
+
+def volume_down():
+    pyautogui.press('volumedown')
+
+def set_brightness(level):  # 0-100
+    try:
+        import screen_brightness_control as sbc
+        sbc.set_brightness(level)
+    except ImportError:
+        speak("Install screen_brightness_control for brightness commands.")
+
+def open_app(exe_path):
+    try:
+        subprocess.Popen(exe_path)
+    except Exception:
+        speak("Could not open application.")
+
+def close_app(process_name):
+    os.system(f"taskkill /f /im {process_name}")
+
+recording = False
+
+def start_screen_recording(filename="recording.avi", duration=10):
+    global recording
+    recording = True
+    import cv2
+    import numpy as np
+    screen_size = pyautogui.size()
+    fourcc = cv2.VideoWriter_fourcc(*"XVID")
+    out = cv2.VideoWriter(filename, fourcc, 20.0, screen_size)
+    start_time = time.time()
+    while recording and (time.time() - start_time < duration):
+        img = pyautogui.screenshot()
+        frame = np.array(img)
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        out.write(frame)
+    out.release()
+
+def stop_screen_recording():
+    global recording
+    recording = False
+
+def read_text_file(filepath):
+    try:
+        with open(filepath, 'r') as f:
+            content = f.read()
+        speak(content)
+    except Exception:
+        speak("Could not read the file.")
+
+def write_text_file(filepath, text):
+    try:
+        with open(filepath, 'a') as f:
+            f.write(text + '\n')
+        speak("Text added to file.")
+    except Exception:
+        speak("Could not write to the file.")
+
+def countdown_timer(seconds):
+    def timer():
+        time.sleep(seconds)
+        speak("Time's up!")
+    threading.Thread(target=timer).start()
+
+stopwatch_start_time = None
+
+def start_stopwatch():
+    global stopwatch_start_time
+    stopwatch_start_time = time.time()
+    speak("Stopwatch started.")
+
+def stop_stopwatch():
+    global stopwatch_start_time
+    if stopwatch_start_time is not None:
+        elapsed = time.time() - stopwatch_start_time
+        mins, secs = divmod(int(elapsed), 60)
+        speak(f"Stopwatch stopped at {mins} minutes, {secs} seconds.")
+        stopwatch_start_time = None
+    else:
+        speak("Stopwatch was not started.")
+
+def inches_to_cm(inches):
+    return inches * 2.54
+
+def cm_to_inches(cm):
+    return cm / 2.54
+
+def celsius_to_fahrenheit(c):
+    return (c * 9/5) + 32
+
+def fahrenheit_to_celsius(f):
+    return (f - 32) * 5/9
+
+def move_mouse(x, y):
+    pyautogui.moveTo(x, y)
+
+def click_mouse():
+    pyautogui.click()
+
+def type_text(text):
+    pyautogui.write(text)
 
 def add_to_startup():
     try:
@@ -554,12 +676,160 @@ def handle_command(query):
         today = datetime.datetime.now().strftime("%A, %d %B %Y")
         speak(f"Today's date is {today}")
         return
+        # === JARVIS FEATURE COMMANDS ===
+    import re
+
+    # Volume and Brightness
+    if "set volume to" in query:
+        try:
+            level = int(re.search(r"set volume to (\d+)", query).group(1))
+            set_volume(level)
+            speak(f"Volume set to {level} percent.")
+            return
+        except:
+            speak("Please specify a volume between 0 and 100.")
+            return
+
+    if "mute volume" in query:
+        mute_volume()
+        speak("Volume muted.")
+        return
+
+    if "volume up" in query:
+        volume_up()
+        speak("Volume increased.")
+        return
+
+    if "volume down" in query:
+        volume_down()
+        speak("Volume decreased.")
+        return
+
+    if "set brightness to" in query:
+        try:
+            level = int(re.search(r"set brightness to (\d+)", query).group(1))
+            set_brightness(level)
+            speak(f"Brightness set to {level} percent.")
+            return
+        except:
+            speak("Please specify a brightness between 0 and 100.")
+            return
+
+    # Open/Close Applications
+    if query.startswith("open "):
+        app = query.replace("open ", "").strip()
+        open_app(app + ".exe")
+        speak(f"Opening {app}.")
+        return
+
+    if query.startswith("close "):
+        app = query.replace("close ", "").strip()
+        close_app(app + ".exe")
+        speak(f"Closed {app}.")
+        return
+
+    # Screen Recording
+    if "start screen recording" in query:
+        duration = 10  # default duration
+        match = re.search(r"for (\d+) seconds", query)
+        if match:
+            duration = int(match.group(1))
+        threading.Thread(target=start_screen_recording, args=("recording.avi", duration)).start()
+        speak(f"Screen recording started for {duration} seconds.")
+        return
+
+    if "stop screen recording" in query:
+        stop_screen_recording()
+        speak("Screen recording stopped.")
+        return
+
+    # Text File Reading and Writing
+    if "read file" in query:
+        speak("Please say the filename.")
+        filename = take_command()
+        read_text_file(filename)
+        return
+
+    if "write to file" in query:
+        speak("Please say the filename.")
+        filename = take_command()
+        speak("What should I write?")
+        text = take_command()
+        write_text_file(filename, text)
+        return
+
+    # Countdown Timer
+    if "set timer for" in query:
+        match = re.search(r"set timer for (\d+) (seconds|minutes)", query)
+        if match:
+            value = int(match.group(1))
+            unit = match.group(2)
+            seconds = value * 60 if "minute" in unit else value
+            countdown_timer(seconds)
+            speak(f"Timer set for {value} {unit}.")
+            return
+        else:
+            speak("Please specify the timer duration.")
+            return
+
+    # Stopwatch
+    if "start stopwatch" in query:
+        start_stopwatch()
+        return
+
+    if "stop stopwatch" in query:
+        stop_stopwatch()
+        return
+
+    # Unit Conversion
+    if "convert" in query:
+        match = re.search(r"convert (\d+(\.\d+)?) (\w+) to (\w+)", query)
+        if match:
+            value = float(match.group(1))
+            from_unit = match.group(3)
+            to_unit = match.group(4)
+            result = None
+            if from_unit == "inches" and to_unit == "cm":
+                result = inches_to_cm(value)
+            elif from_unit == "cm" and to_unit == "inches":
+                result = cm_to_inches(value)
+            elif from_unit == "celsius" and to_unit == "fahrenheit":
+                result = celsius_to_fahrenheit(value)
+            elif from_unit == "fahrenheit" and to_unit == "celsius":
+                result = fahrenheit_to_celsius(value)
+            if result is not None:
+                speak(f"{value} {from_unit} is {result:.2f} {to_unit}.")
+                return
+            else:
+                speak("Sorry, I can't convert those units yet.")
+                return
+
+    # Desktop Automation
+    if "move mouse to" in query:
+        match = re.search(r"move mouse to (\d+),? ?(\d+)", query)
+        if match:
+            x, y = int(match.group(1)), int(match.group(2))
+            move_mouse(x, y)
+            speak(f"Mouse moved to {x}, {y}.")
+            return
+
+    if "click mouse" in query:
+        click_mouse()
+        speak("Mouse clicked.")
+        return
+
+    if "type" in query and "on screen" in query:
+        text = query.replace("type", "").replace("on screen", "").strip()
+        type_text(text)
+        speak("Typed the text.")
+        return
 
     # Exit
-    if "exit" in query or "stop" in query:
+    if "bye" in query or "goodbye" in query:
         speak("Goodbye!")
         sys.exit()
-
+        
+    
     speak("Command not recognized.")
 
 def run_voice_assistant():
