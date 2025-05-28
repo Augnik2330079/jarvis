@@ -204,23 +204,30 @@ def take_command():
     recognizer = sr.Recognizer()
     with sr.Microphone() as source:
         print("Calibrating microphone for ambient noise...")
-        recognizer.adjust_for_ambient_noise(source, duration=3)  # Calibrate for 3 seconds
-        recognizer.energy_threshold = 300  # Lower threshold for soft voices; try 150–500 if needed
-        recognizer.dynamic_energy_threshold = True  # Auto-adjust threshold
-        recognizer.pause_threshold = 1.2   # Allow longer pauses for slow speech
+        recognizer.adjust_for_ambient_noise(source, duration=1.0)  # Shorter, more responsive
+        recognizer.energy_threshold = 250  # Lowered for better sensitivity
+        recognizer.dynamic_energy_threshold = True
+        recognizer.pause_threshold = 0.8   # Faster end-of-speech detection
+        recognizer.phrase_threshold = 0.3
+        recognizer.operation_timeout = 5   # Faster timeout if no speech detected
         print("🔍 Listening...")
         try:
-            audio = recognizer.listen(source, timeout=8, phrase_time_limit=12)
+            audio = recognizer.listen(source, timeout=5, phrase_time_limit=5)
             query = recognizer.recognize_google(audio, language='en-in').lower()
             print(f"🗣️ User: {query}")
             return query
+        except sr.WaitTimeoutError:
+            print("No speech detected. Please try again.")
+            return ""
         except sr.UnknownValueError:
             if not SLEEP_MODE:
-                speak("Audio unclear. Please repeat.")
+                speak("Sorry, I didn't catch that. Please repeat.")
             return ""
         except Exception as e:
             print("Recognition error:", e)
             return ""
+
+
 
 
 def get_installed_apps():
@@ -308,15 +315,23 @@ def alarm_trigger():
 def handle_command(query):
     global SILENT_MODE, WHISPER_MODE, USER_NAME, SLEEP_MODE
 
-    # Sleep/Wake
     if "sleep" in query:
-        SLEEP_MODE = True
         speak("Going to sleep. Say 'wake up' to activate me.")
+        SLEEP_MODE = True
         return
+
     if "wake up" in query:
         SLEEP_MODE = False
         speak("I'm awake and ready!")
+        speak("ok.")
         return
+
+    # ... more commands, all indented at this level ...
+
+
+
+
+
 
     # Name Change
     if "call me" in query:
@@ -550,10 +565,19 @@ def handle_command(query):
         return
 
     # WhatsApp
+    from tkinter import simpledialog
+
     if "whatsapp" in query or "send message" in query or "send whatsapp message" in query:
         try:
-            speak("Say phone number with country code (e.g., plus nine one nine8xxxxxxx)")
-            number = take_command().replace(" ", "").replace("plus", "+")
+            speak("Please enter the phone number with country code (e.g., +9198xxxxxxx).")
+            root = tk.Tk()
+            root.withdraw()  # Hide the main window
+            number = simpledialog.askstring("WhatsApp", "Enter phone number with country code (e.g., +9198xxxxxxx):")
+            root.destroy()
+            if not number:
+                speak("No number entered. Cancelling WhatsApp message.")
+                return
+            number = number.replace(" ", "")
             if not re.match(r"^\+\d{10,15}$", number):
                 speak("Invalid number format. Please try again.")
                 return
@@ -567,9 +591,12 @@ def handle_command(query):
                 speak("Chrome browser not available")
                 return
             speak("WhatsApp message sent.")
+            speak("Ok.")
         except Exception as e:
             speak(f"Failed to send message: {str(e)}")
         return
+
+
 
     # Speed Test
     if "check internet speed" in query:
@@ -677,7 +704,7 @@ def handle_command(query):
         speak(f"Today's date is {today}")
         return
         # === JARVIS FEATURE COMMANDS ===
-    import re
+
 
     # Volume and Brightness
     if "set volume to" in query:
@@ -837,20 +864,30 @@ def run_voice_assistant():
     while True:
         try:
             if SLEEP_MODE:
-                query = take_command()
-                if "wake up" in query:
-                    handle_command(query)
+                # Give feedback when entering sleep mode
+                speak("Going to sleep. Say 'wake up' to activate me.")
+                while SLEEP_MODE:
+                    query = take_command()
+                    if "wake up" in query:
+                        handle_command(query)  # This will set SLEEP_MODE = False
+                        break
+                    else:
+                        speak("I'm asleep. Say 'wake up' to activate me.")
             else:
                 query = take_command()
                 if query:
                     handle_command(query)
         except Exception as e:
             print("Error:", e)
+            import traceback
             traceback.print_exc()
             with open("jarvis_errors.log", "a") as f:
+                import datetime
                 f.write(f"{datetime.datetime.now()} - {str(e)}\n")
             speak("Error detected. Restarting...")
+            import time
             time.sleep(5)
+
 
 def create_gui():
     window = tk.Tk()
@@ -894,8 +931,11 @@ def authenticate(parent_window):
         run_voice_assistant()
     else:
         speak("Access denied")
+        
+        
         sys.exit()
 
 if __name__ == "__main__":
     os.makedirs(NOTES_FOLDER, exist_ok=True)
     create_gui()
+
