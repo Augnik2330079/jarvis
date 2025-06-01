@@ -5,8 +5,8 @@ if not hasattr(sys.stdout, "fileno"):
 if not hasattr(sys.stderr, "fileno"):
     import io
     sys.stderr = io.StringIO()
-
 import os
+
 import sys
 import time
 import pyttsx3
@@ -15,6 +15,8 @@ import datetime
 import webbrowser
 import wikipedia
 import pyautogui
+import spotipy
+from spotipy.oauth2 import SpotifyOAuth
 import psutil
 import subprocess
 import shutil
@@ -27,13 +29,101 @@ from tkinter import simpledialog, messagebox
 from PIL import ImageGrab, Image
 import pyperclip
 import re
+import cv2
 import traceback
+from mistralai import Mistral
 from threading import Timer
 from difflib import SequenceMatcher
 
+
+
+
+
+
+conversation_history = []
+
+IMGBB_API_KEY = ""
+MISTRAL_API_KEY = ""
+
+
+import base64
+
+def image_to_base64(image_path):
+    with open(image_path, "rb") as img_file:
+        return base64.b64encode(img_file.read()).decode("utf-8")
+
+
+
+
+
+def capture_image(filename="captured_image.jpg"):
+    cam = cv2.VideoCapture(0)
+    if not cam.isOpened():
+        print("Cannot open camera")
+        return None
+    time.sleep(2)  # Give the camera time to warm up
+    ret, frame = cam.read()
+    cam.release()
+    if not ret:
+        print("Failed to grab frame")
+        return None
+    cv2.imwrite(filename, frame)
+    print(f"Image captured and saved as {filename}")
+    return filename
+
+def upload_image_to_imgbb(image_path, api_key=IMGBB_API_KEY):
+    with open(image_path, "rb") as file:
+        url = "https://api.imgbb.com/1/upload"
+        payload = {"key": api_key}
+        files = {"image": file}
+        response = requests.post(url, data=payload, files=files)
+        data = response.json()
+        if data.get("success"):
+            image_url = data["data"]["url"]
+            print("Image uploaded:", image_url)
+            return image_url
+        else:
+            print("Image upload failed:", data)
+            return None
+
+def describe_image_with_mistral(image_path, api_key=MISTRAL_API_KEY):
+    client = Mistral(api_key=api_key)
+    model = "pixtral-12b-latest"
+    base64_image = image_to_base64(image_path)
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this image."},
+                {"type": "image_url", "image_url": f"data:image/jpeg;base64,{base64_image}"}
+            ]
+        }
+    ]
+    response = client.chat.complete(model=model, messages=messages)
+    description = response.choices[0].message.content
+    print("\nMistral AI Description:\n", description)
+    return description
+
+
+
+
+def wolfram_alpha_query(query):
+    import wolframalpha
+    WOLFRAM_APP_ID = ""  # Replace with your WolframAlpha API key
+    try:
+        client = wolframalpha.Client(WOLFRAM_APP_ID)
+        res = client.query(query)
+        return next(res.results).text
+    except StopIteration:
+        return "No results found."
+    except Exception as e:
+        print(f"WolframAlpha error: {e}")
+        return "Could not compute the answer."
+
+
 # === API KEYS ===
-WEATHER_API_KEY = "ff80fe49f6d921cb7686df6917015a51"
-NEWS_API_KEY = "f9adae143f4a4e738932ce3122d7ff31"
+WEATHER_API_KEY = ""
+NEWS_API_KEY = ""
 
 PASSWORD = os.getenv("JARVIS_PASSWORD", "1234")
 USER_NAME = "Sir"
@@ -202,30 +292,35 @@ def wish_user():
 
 def take_command():
     recognizer = sr.Recognizer()
-    with sr.Microphone() as source:
+    mic_index = 1  # <-- Replace with your correct mic index!
+    with sr.Microphone(device_index=mic_index) as source:
         print("Calibrating microphone for ambient noise...")
-        recognizer.adjust_for_ambient_noise(source, duration=1.0)  # Shorter, more responsive
-        recognizer.energy_threshold = 250  # Lowered for better sensitivity
-        recognizer.dynamic_energy_threshold = True
-        recognizer.pause_threshold = 0.8   # Faster end-of-speech detection
-        recognizer.phrase_threshold = 0.3
-        recognizer.operation_timeout = 5   # Faster timeout if no speech detected
+        recognizer.adjust_for_ambient_noise(source, duration=2)
+        recognizer.energy_threshold = 400  # Try 200, 400, 800, etc.
+        recognizer.dynamic_energy_threshold = False
+        print("Energy threshold after calibration:", recognizer.energy_threshold)
         print("🔍 Listening...")
         try:
-            audio = recognizer.listen(source, timeout=5, phrase_time_limit=5)
+            audio = recognizer.listen(source, timeout=10, phrase_time_limit=10)
             query = recognizer.recognize_google(audio, language='en-in').lower()
             print(f"🗣️ User: {query}")
             return query
         except sr.WaitTimeoutError:
-            print("No speech detected. Please try again.")
+            speak("Sorry, I didn't hear anything. Please repeat.")
             return ""
+
         except sr.UnknownValueError:
-            if not SLEEP_MODE:
-                speak("Sorry, I didn't catch that. Please repeat.")
+            speak("Sorry, I didn't catch that. Please repeat.")
             return ""
         except Exception as e:
             print("Recognition error:", e)
             return ""
+
+
+
+
+
+
 
 
 
@@ -311,6 +406,31 @@ def alarm_trigger():
         playsound('alarm.mp3')
     except Exception:
         speak("Wake up! This is your alarm.")
+        
+def get_email_details_gui():
+    import tkinter as tk
+    from tkinter import simpledialog
+
+    root = tk.Tk()
+    root.withdraw()  # Hide the main window
+
+    recipient = simpledialog.askstring("Send Email", "Recipient Email Address:", parent=root)
+    if not recipient:
+        root.destroy()
+        return None, None, None
+
+    subject = simpledialog.askstring("Send Email", "Subject:", parent=root)
+    if subject is None:
+        root.destroy()
+        return None, None, None
+
+    message = simpledialog.askstring("Send Email", "Message:", parent=root)
+    root.destroy()
+    if message is None:
+        return None, None, None
+
+    return recipient, subject, message
+
 
 def handle_command(query):
     global SILENT_MODE, WHISPER_MODE, USER_NAME, SLEEP_MODE
@@ -323,7 +443,6 @@ def handle_command(query):
     if "wake up" in query:
         SLEEP_MODE = False
         speak("I'm awake and ready!")
-        speak("ok.")
         return
 
     # ... more commands, all indented at this level ...
@@ -565,8 +684,6 @@ def handle_command(query):
         return
 
     # WhatsApp
-    from tkinter import simpledialog
-
     if "whatsapp" in query or "send message" in query or "send whatsapp message" in query:
         try:
             speak("Please enter the phone number with country code (e.g., +9198xxxxxxx).")
@@ -575,6 +692,7 @@ def handle_command(query):
             number = simpledialog.askstring("WhatsApp", "Enter phone number with country code (e.g., +9198xxxxxxx):")
             root.destroy()
             if not number:
+                
                 speak("No number entered. Cancelling WhatsApp message.")
                 return
             number = number.replace(" ", "")
@@ -585,10 +703,10 @@ def handle_command(query):
             message = take_command()
             import pywhatkit
             try:
-                webbrowser.get('chrome')
                 pywhatkit.sendwhatmsg_instantly(number, message, tab_close=True)
-            except webbrowser.Error:
-                speak("Chrome browser not available")
+            except Exception as e:
+                speak("Failed to send WhatsApp message.")
+                print("WhatsApp error:", e)
                 return
             speak("WhatsApp message sent.")
             speak("Ok.")
@@ -597,28 +715,91 @@ def handle_command(query):
         return
 
 
+#speed test
 
-    # Speed Test
-    if "check internet speed" in query:
+    if "check internet speed" in query or "internet speed" in query or "speed test" in query:
         try:
-            st = speedtest.Speedtest()
-            speak("Checking internet speed...")
-            download = st.download() / 1_000_000
-            upload = st.upload() / 1_000_000
-            speak(f"Download: {download:.2f} Mbps, Upload: {upload:.2f} Mbps")
+            import speedtest
+            speak("Testing your internet speed. Please wait...")
+            st = speedtest.Speedtest(secure=True)  # <-- Use secure=True!
+            st.get_best_server()
+            download_speed = st.download() / 1_000_000  # Mbps
+            upload_speed = st.upload() / 1_000_000      # Mbps
+            ping = st.results.ping
+            speak(f"Download speed is {download_speed:.2f} megabits per second. "
+                f"Upload speed is {upload_speed:.2f} megabits per second. "
+                f"Ping is {ping:.0f} milliseconds.")
         except Exception as e:
-            speak("Could not check internet speed.")
+            print("Internet speed test error:", e)
+            speak("Sorry, I could not check your internet speed.")
         return
 
-    # Wikipedia
+
+#wikipedia
+
     if "wikipedia" in query:
         try:
+            
             search = query.replace("search wikipedia for", "").strip()
-            result = wikipedia.summary(search, sentences=2, auto_suggest=False)
-            speak(result)
+            try:
+                result = wikipedia.summary(search, sentences=2, auto_suggest=False)
+                speak(result)
+            except wikipedia.exceptions.DisambiguationError as e:
+                option = e.options[0]
+                result = wikipedia.summary(option, sentences=2, auto_suggest=False)
+                speak(f"Showing result for {option}: {result}")
+            except wikipedia.exceptions.PageError:
+                speak("Sorry, I couldn't find that page on Wikipedia.")
+            except Exception as e:
+                speak("Sorry, I couldn't find that on Wikipedia.")
         except Exception as e:
             speak("Sorry, I couldn't find that on Wikipedia.")
         return
+#read email
+
+    if "read my email" in query or "read latest email" in query:
+        try:
+            import imaplib
+            import email
+
+            EMAIL = ""
+            PASSWORD = ""
+            imap_url = "abcd.gmail.com"
+
+            # Connect to Gmail IMAP
+            mail = imaplib.IMAP4_SSL(imap_url)
+            mail.login(EMAIL, PASSWORD)
+            mail.select("inbox")
+
+            # Search for unread emails
+            status, messages = mail.search(None, '(UNSEEN)')
+            mail_ids = messages[0].split()
+            if not mail_ids:
+                speak("No new emails.")
+                mail.logout()
+                return
+
+            # Fetch and read the latest unread email
+            latest_id = mail_ids[-1]
+            status, msg_data = mail.fetch(latest_id, '(RFC822)')
+            for response_part in msg_data:
+                if isinstance(response_part, tuple):
+                    msg = email.message_from_bytes(response_part[1])
+                    subject = msg["subject"]
+                    from_ = msg["from"]
+                    speak(f"New email from {from_} with subject: {subject}")
+                    # Read the email body (plain text only)
+                    for part in msg.walk():
+                        if part.get_content_type() == "text/plain":
+                            body = part.get_payload(decode=True).decode(errors="ignore")
+                            speak(body[:500])  # Read first 500 chars
+                            break
+            mail.logout()
+        except Exception as e:
+            print("Email read error:", e)
+            speak("Failed to read emails.")
+        return
+
 
     # YouTube
     if "youtube" in query:
@@ -636,48 +817,179 @@ def handle_command(query):
 
     # Weather
     if "weather" in query:
-        speak("Which city?")
-        city = take_command()
-        if not city:
-            return
         try:
-            url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={WEATHER_API_KEY}&units=metric"
-            response = requests.get(url).json()
-            if response["cod"] == 200:
-                temp = response["main"]["temp"]
-                desc = response["weather"][0]["description"]
-                speak(f"The temperature in {city} is {temp}°C with {desc}")
-            else:
-                speak("City not found.")
+            speak("Which city?")
+            city = take_command()
+            if not city:
+                speak("Sorry, I didn't catch the city name.")
+                return
+            import requests
+            api_key = ""  # Replace with your actual key
+            url = f"https://api.openweathermap.org/data/2.5/weather?q={city}&appid={api_key}&units=metric"
+            response = requests.get(url)
+            data = response.json()
+            if data.get("cod") != 200:
+                speak(f"Sorry, I couldn't find weather information for {city}.")
+                print("Weather API response:", data)
+                return
+            weather_desc = data["weather"][0]["description"]
+            temp = data["main"]["temp"]
+            humidity = data["main"]["humidity"]
+            wind = data["wind"]["speed"]
+            speak(f"The weather in {city} is {weather_desc}, temperature is {temp}°C, humidity is {humidity} percent, and wind speed is {wind} meters per second.")
         except Exception as e:
+            print("Weather error:", e)
             speak("Failed to fetch weather information.")
         return
 
-    # News
-    if "news" in query:
+#news
+
+    if "news" in query or "latest news" in query or "get news" in query or "read news" in query:
         try:
-            url = f"https://newsapi.org/v2/top-headlines?country=in&apiKey={NEWS_API_KEY}"
-            data = requests.get(url).json()
-            articles = data.get("articles", [])[:5]
-            if articles:
-                speak("Top headlines:")
-                for article in articles:
-                    speak(article.get("title", "Untitled article"))
+            categories = {
+                "business": "business",
+                "entertainment": "entertainment",
+                "health": "health",
+                "science": "science",
+                "sports": "sports",
+                "technology": "technology"
+            }
+            speak("Which field news do you want? Business, Health, Technology, Sports, Entertainment, or Science?")
+            category = take_command()
+            if not category:
+                speak("Sorry, I didn't catch the category.")
+                return
+            # Find the best match for the spoken category
+            selected = None
+            for key in categories:
+                if key in category.lower():
+                    selected = categories[key]
+                    break
+            if not selected:
+                speak("Sorry, I couldn't find that news category.")
+                return
+
+            url = f"https://newsapi.org/v2/top-headlines?country=in&category={selected}&apiKey={NEWS_API_KEY}"
+            response = requests.get(url)
+            news = response.json()
+            articles = news.get("articles", [])
+
+            # Fallback to general headlines if no articles found
+            if not articles:
+                print("No articles found for this category. Raw response:", news)
+                speak("Sorry, no news articles found for this category. Trying general headlines.")
+                url = f"https://newsapi.org/v2/top-headlines?country=in&apiKey={NEWS_API_KEY}"
+                response = requests.get(url)
+                news = response.json()
+                articles = news.get("articles", [])
+                if not articles:
+                    speak("Sorry, no news articles found at this time.")
+                    return
+                speak("Here are the latest general headlines.")
+
             else:
-                speak("No current news available.")
+                speak(f"Here are the top {selected} news headlines.")
+
+            for article in articles[:5]:  # Limit to 5 headlines for brevity
+                title = article.get("title", "No title")
+                print(title)
+                speak(title)
+                news_url = article.get("url", "")
+                if news_url:
+                    print(f"For more info visit: {news_url}")
+
+                speak("Say 'next' to continue or 'stop' to end.")
+                user_input = take_command()
+                if "stop" in user_input:
+                    break
+            speak("That's all for now.")
         except Exception as e:
-            speak("Couldn't fetch news updates.")
+            print("Error fetching news:", e)
+            speak("Sorry, I couldn't fetch the news at this time.")
         return
 
-    # Calculator
-    if "calculate" in query:
-        expression = query.replace("calculate", "").strip()
-        try:
-            result = eval(expression)
-            speak(f"The result is {result}")
-        except:
-            speak("Invalid calculation expression.")
+#spotify
+
+    if "spotify" in query:
+        speak("Which song or artist should I play on Spotify?")
+        song_query = take_command()
+        if song_query:
+            try:
+                import spotipy
+                from spotipy.oauth2 import SpotifyOAuth
+
+                SPOTIPY_CLIENT_ID = ""
+                SPOTIPY_CLIENT_SECRET = ""
+                SPOTIPY_REDIRECT_URI = ""
+                SCOPE = "user-read-playback-state user-modify-playback-state user-read-currently-playing streaming"
+
+                sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
+                    client_id=SPOTIPY_CLIENT_ID,
+                    client_secret=SPOTIPY_CLIENT_SECRET,
+                    redirect_uri=SPOTIPY_REDIRECT_URI,
+                    scope=SCOPE
+                ))
+                results = sp.search(q=song_query, type='track', limit=1)
+                tracks = results['tracks']['items']
+                if not tracks:
+                    speak("Sorry, I couldn't find that song on Spotify.")
+                    return
+                track_uri = tracks[0]['uri']
+                devices = sp.devices()
+                if not devices['devices']:
+                    speak("Spotify is not open on any device. Please open Spotify and try again.")
+                    return
+                # Prefer the desktop app if available
+                device_id = None
+                for device in devices['devices']:
+                    if device['type'] == 'Computer':
+                        device_id = device['id']
+                        break
+                if not device_id:
+                    device_id = devices['devices'][0]['id']
+                sp.start_playback(device_id=device_id, uris=[track_uri])
+                song_name = tracks[0]['name']
+                artist_name = tracks[0]['artists'][0]['name']
+                speak(f"Playing {song_name} by {artist_name} on Spotify.")
+            except Exception as e:
+                print("Spotify error:", e)
+                speak("Failed to play music on Spotify.")
+        else:
+            speak("Sorry, I didn't catch the song name.")
         return
+
+
+
+
+
+
+
+#calculation
+
+    if "hello" in query:
+        speak("Hello!")
+    elif "calculate" in query or "what is" in query or "solve" in query:
+        try:
+            # Clean up the query for better WolframAlpha parsing
+            math_query = query.replace("calculate", "").replace("jarvis", "").replace("what is", "").replace("solve", "").strip()
+            # Optional: handle simple verbal math
+            conversions = {
+                "plus": "+", "minus": "-", "times": "*", "multiply": "*",
+                "divided by": "/", "divide": "/"
+            }
+            for word, symbol in conversions.items():
+                math_query = math_query.replace(word, symbol)
+            speak(f"Calculating: {math_query}")
+            result = wolfram_alpha_query(math_query)
+            print(result)
+            speak(result)
+        except Exception as e:
+            print("Calculation error:", e)
+            speak("Sorry, I couldn't solve that problem.")
+        return
+
+
+
 
     # Voice Modes
     if "silent mode" in query:
@@ -725,6 +1037,7 @@ def handle_command(query):
     if "volume up" in query:
         volume_up()
         speak("Volume increased.")
+        
         return
 
     if "volume down" in query:
@@ -742,12 +1055,6 @@ def handle_command(query):
             speak("Please specify a brightness between 0 and 100.")
             return
 
-    # Open/Close Applications
-    if query.startswith("open "):
-        app = query.replace("open ", "").strip()
-        open_app(app + ".exe")
-        speak(f"Opening {app}.")
-        return
 
     if query.startswith("close "):
         app = query.replace("close ", "").strip()
@@ -830,6 +1137,43 @@ def handle_command(query):
             else:
                 speak("Sorry, I can't convert those units yet.")
                 return
+             
+             # Text Translation
+
+        # Text Translation
+    if "translate" in query:
+        try:
+            from deep_translator import GoogleTranslator
+            speak("What text should I translate?")
+            text = take_command()
+            if not text:
+                speak("Sorry, I didn't catch the text to translate.")
+                return
+            speak("Which language should I translate to? For example, French, Spanish, Hindi, German, Bengali, or Japanese.")
+            lang = take_command().lower()
+            lang_map = {
+                "french": "fr",
+                "spanish": "es",
+                "hindi": "hi",
+                "german": "de",
+                "bengali": "bn",
+                "japanese": "ja"
+            }
+            dest = lang_map.get(lang, "en")
+            result = GoogleTranslator(source='auto', target=dest).translate(text)
+            speak(f"The translation in {lang} is: {result}")
+            # This line makes the AI speak the translated word/phrase
+            speak(result)
+        except Exception as e:
+            print("Translation error:", e)
+            speak("Translation failed.")
+        return
+
+
+
+    
+
+
 
     # Desktop Automation
     if "move mouse to" in query:
@@ -850,6 +1194,271 @@ def handle_command(query):
         type_text(text)
         speak("Typed the text.")
         return
+    
+    # save chat
+    if "save chat" in query or "save conversation" in query:
+        try:
+            with open("chat_log.txt", "a", encoding="utf-8") as f:
+                f.write(f"User: {query}\n")
+            speak("Chat saved.")
+        except Exception as e:
+            print("Save chat error:", e)
+            speak("Failed to save chat.")
+        return
+
+# gmail
+    if "send email" in query:
+        try:
+            import smtplib
+            from email.mime.text import MIMEText
+
+            recipient, subject, message = get_email_details_gui()
+            if not recipient or not subject or not message:
+                speak("Email cancelled.")
+                return
+
+            # Validate recipient email format
+            if not re.match(r"[^@]+@[^@]+\.[^@]+", recipient):
+                speak("Invalid recipient email address.")
+                return
+
+            sender_email = ""
+            sender_password = ""  # Your App Password
+
+            msg = MIMEText(message)
+            msg["Subject"] = subject
+            msg["From"] = sender_email
+            msg["To"] = recipient
+
+            try:
+                server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+                server.login(sender_email, sender_password)
+                server.sendmail(sender_email, recipient, msg.as_string())
+                server.quit()
+                speak("Email sent successfully.")
+            except Exception as smtp_error:
+                print("Email sending error:", smtp_error)
+                speak("Failed to send email. Please check your credentials and network connection.")
+        except Exception as e:
+            print("Email error:", e)
+            speak("Failed to send email due to an unexpected error.")
+        return
+
+
+
+  #open website
+    if "search website" in query or "open website" in query or "website" in query:
+        try:
+            speak("Which website should I open?")
+            site = take_command()
+            if not site:
+                speak("Sorry, I didn't catch the website.")
+                return
+            site = site.strip().lower()
+            # Add www. and .com if only a name is given
+            if not site.startswith("http"):
+                if "." not in site:
+                    site = f"https://www.{site}.com"
+                else:
+                    site = "https://" + site
+            webbrowser.open(site)
+            speak(f"Opening {site}")
+        except Exception as e:
+            print("Website error:", e)
+            speak("Failed to open website.")
+        return
+
+
+
+    # ChatBot
+
+    if "ask ai" in query:
+        try:
+            from mistralai import Mistral
+            speak("What would you like to ask?")
+            prompt = take_command()
+            if not prompt:
+                speak("Sorry, I didn't catch your question.")
+                return
+
+            api_key = ""
+            models = ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest"]
+            answer = None
+            client = Mistral(api_key=api_key)
+            for model in models:
+                try:
+                    chat_response = client.chat.complete(
+                        model=model,
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    answer = chat_response.choices[0].message.content.strip()
+                    if answer:
+                        break
+                except Exception as e:
+                    print(f"Mistral model {model} failed: {e}")
+                    continue
+
+            if answer:
+                speak(answer)
+            else:
+                speak("Sorry, I couldn't get an answer from any AI model.")
+        except Exception as e:
+            print("Mistral AI error:", e)
+            speak("AI chat failed.")
+        return
+
+#like alexa
+
+    if "chat" in query or "let's talk" in query or "talk to me" in query or "be my friend" in query:
+        speak("Let's chat! You can say 'stop' or 'bye' anytime to end the conversation.")
+        while True:
+            user_input = take_command()
+            if not user_input or user_input.lower() in ["stop", "exit", "bye"]:
+                speak("It was nice talking to you! Let me know if you want to chat again.")
+                break
+            conversation_history.append({"role": "user", "content": user_input})
+
+            # --- AI model call (example with Mistral, OpenAI, etc.) ---
+            try:
+                from mistralai import Mistral
+                api_key = ""
+                client = Mistral(api_key=api_key)
+                response = client.chat.complete(
+                    model="mistral-small-latest",
+                    messages=conversation_history
+                )
+                ai_reply = response.choices[0].message.content.strip()
+            except Exception as e:
+                print("AI chat error:", e)
+                ai_reply = "Sorry, I couldn't get an answer right now."
+
+            conversation_history.append({"role": "assistant", "content": ai_reply})
+            speak(ai_reply)
+
+
+#control light
+
+
+    if "turn on light" in query or "switch on light" in query:
+        try:
+            import paho.mqtt.publish as publish
+            # Replace with your MQTT broker IP and topic
+            publish.single("home/livingroom/light", "ON", hostname="192.168.1.10")
+            speak("Turning on the living room light.")
+        except Exception as e:
+            print("MQTT error:", e)
+            speak("Failed to control the smart light.")
+        return
+
+    if "turn off light" in query or "switch off light" in query:
+        try:
+            import paho.mqtt.publish as publish
+            publish.single("home/livingroom/light", "OFF", hostname="192.168.1.10")
+            speak("Turning off the living room light.")
+        except Exception as e:
+            print("MQTT error:", e)
+            speak("Failed to control the smart light.")
+        return
+
+
+
+
+    
+#Image Generation
+
+    elif "generate image" in query or "make a picture" in query or "bing image" in query:
+        speak("What image should I generate with Bing Image Creator?")
+        prompt = take_command()
+        if not prompt:
+            speak("Sorry, I didn't catch the image description.")
+            return
+        # Bing Image Creator URL with prompt pre-filled
+        url = f"https://www.bing.com/images/create?q={prompt.replace(' ', '+')}"
+        speak("Opening Bing Image Creator in your browser.")
+        webbrowser.open(url)
+        return
+
+
+# open anyapp
+
+    elif "open" in query:   #EASY METHOD
+                        query = query.replace("open","")
+                        query = query.replace("jarvis","")
+                        pyautogui.press("super")
+                        pyautogui.typewrite(query)
+                        pyautogui.sleep(2)
+                        pyautogui.press("enter")
+#photo
+
+    elif "click my photo" in query:
+        import time
+
+        speak("Opening camera. Get ready!")
+        pyautogui.press("super")            # Open Start Menu
+        time.sleep(0.5)
+        pyautogui.typewrite("camera")       # Type 'camera' to search
+        time.sleep(0.5)
+        pyautogui.press("enter")            # Open the Camera app
+        time.sleep(3)                       # Wait for Camera app to load (adjust if needed)
+        speak("SMILE")
+        pyautogui.press("enter")            # Take the photo (Enter triggers shutter
+        
+        speak("Photo clicked!")
+        return
+    
+#visual search
+
+    if "visual" in query or "describe what you see" in query:
+        speak("Capturing an image from the webcam for visual search.")
+        filename = capture_image()
+        if not filename:
+            speak("Camera error, could not capture image.")
+            return
+        description = describe_image_with_mistral(filename)
+        speak("Here's what I see: " + description)
+        print("Visual Search Description:", description)
+        return
+
+    
+#ipl score
+
+    if "ipl score" in query:
+        try:
+            from plyer import notification  # pip install plyer
+            import requests  # pip install requests
+            from bs4 import BeautifulSoup  # pip install bs4
+
+            url = "https://www.cricbuzz.com/"
+            page = requests.get(url)
+            soup = BeautifulSoup(page.text, "html.parser")
+
+            # Find all elements with 'cb-ovr-flo' in their class
+            score_elements = soup.find_all(class_=lambda x: x and 'cb-ovr-flo' in x)
+            score_texts = [el.get_text() for el in score_elements]
+
+            # Find team names and scores by position (based on current Cricbuzz layout)
+            try:
+                team1 = score_texts[10]
+                team1_score = score_texts[11]
+                team2 = score_texts[12]
+                team2_score = score_texts[13]
+
+                print(f"{team1} : {team1_score}")
+                print(f"{team2} : {team2_score}")
+
+                notification.notify(
+                    title="IPL SCORE :- ",
+                    message=f"{team1} : {team1_score}\n{team2} : {team2_score}",
+                    timeout=15
+                )
+                speak(f"Current IPL score: {team1} {team1_score}, {team2} {team2_score}")
+            except IndexError:
+                speak("Sorry, I could not fetch the IPL score right now. The website layout may have changed.")
+        except Exception as e:
+            print("IPL Score error:", e)
+            speak("Failed to fetch IPL score.")
+        return
+
 
     # Exit
     if "bye" in query or "goodbye" in query:
